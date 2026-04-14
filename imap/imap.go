@@ -23,7 +23,6 @@ type Imap struct {
 func New(cfg app.Inbox) (*Imap, error) {
 
 	var err error
-	var mailboxes []*imap.ListData
 
 	i := &Imap{
 		cfg: cfg,
@@ -45,15 +44,10 @@ func New(cfg app.Inbox) (*Imap, error) {
 		return nil, fmt.Errorf("failed to login: %w", err)
 	}
 
-	mailboxes, err = i.client.List("", "*", nil).Collect()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list mailboxes: %w", err)
-	}
-
-	logx.Debug("Available mailboxes:")
-	for _, l := range mailboxes {
-		logx.Debugf("  - %s", l.Mailbox)
-	}
+	// Diagnostic List() call removed — it was only used to log mailbox names
+	// at debug level and is never functionally required. Some IMAP servers
+	// occasionally close the connection mid-LIST, and the resulting
+	// "unexpected EOF" aborted the whole scan cycle.
 
 	return i, nil
 }
