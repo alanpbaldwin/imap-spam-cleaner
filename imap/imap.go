@@ -164,6 +164,13 @@ func (i *Imap) LoadMessages() ([]Message, error) {
 	return messages, nil
 }
 
+func (i *Imap) SelectInbox() error {
+	if _, err := i.client.Select(i.cfg.Inbox, nil).Wait(); err != nil {
+		return fmt.Errorf("failed to select INBOX: %w", err)
+	}
+	return nil
+}
+
 func (i *Imap) MoveMessage(uid imap.UID, mailbox string) error {
 	uidSet := imap.UIDSet{}
 	uidSet.AddNum(uid)

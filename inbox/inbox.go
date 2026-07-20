@@ -87,20 +87,24 @@ func processInbox(ctx app.Context, inbox app.Inbox, prov app.Provider) {
 	logx.Infof("Loaded %d messages", len(msgs))
 	run.MessageCount = len(msgs)
 
+	// Close the IMAP connection before analysis. Provider calls (SpamAssassin,
+	// AI) can take minutes when messages time out, causing the IMAP server to
+	// drop the idle connection. A fresh connection is opened for the move phase.
+	im.Close()
+
 	p, err = provider.New(prov.Type)
 	if err != nil {
 		logx.Errorf("Could not load provider: %v\n", err)
-		im.Close()
 		return
 	}
 
 	if err = p.Init(prov.Config); err != nil {
 		logx.Errorf("Could not init provider: %v\n", err)
-		im.Close()
 		return
 	}
 
-	moved := 0
+	// Phase 1: Analyze all messages, collect those to move
+	var toMove []imap.Message
 	for _, m := range msgs {
 		if wl, ok := ctx.Config.Whitelists[inbox.Whitelist]; ok {
 			trustedSender := false
@@ -129,19 +133,39 @@ func processInbox(ctx app.Context, inbox app.Inbox, prov app.Provider) {
 				logx.Debugf("Analyze only mode, not moving message #%d", m.UID)
 				continue
 			}
+			toMove = append(toMove, m)
+		}
+	}
 
+	// Phase 2: Reconnect and move spam messages
+	moved := 0
+	if len(toMove) > 0 {
+		if im, err = imap.New(inbox); err != nil {
+			logx.Errorf("Could not reconnect to IMAP for move phase: %v\n", err)
+			logx.Infof("Moved %d messages", moved)
+			return
+		}
+		if err = im.SelectInbox(); err != nil {
+			logx.Errorf("Could not select inbox for move phase: %v\n", err)
+			im.Close()
+			logx.Infof("Moved %d messages", moved)
+			return
+		}
+		for _, m := range toMove {
 			if err = im.MoveMessage(m.UID, inbox.Spam); err != nil {
 				logx.Errorf("Could not move message (%s): %v\n", m.Subject, err)
 				continue
 			}
 			moved++
 		}
+		im.Close()
 	}
 	logx.Infof("Moved %d messages", moved)
 	run.MovedCount = moved
 
-	im.Close()
-
+	// NB: no trailing im.Close() here — unlike upstream v0.8.2. In the two-phase
+	// design the connection is already closed (line ~93 before analysis, or at
+	// the end of Phase 2 after the move), so closing again would be a double-close.
 	if !ctx.Options.AnalyzeOnly {
 		run.FinishedAt = time.Now()
 		if err = database.AddRun(&run); err != nil {
